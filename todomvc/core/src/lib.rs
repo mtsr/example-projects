@@ -1,15 +1,16 @@
-use dioxus::prelude::*;
+#![allow(non_snake_case)]
 
-#[derive(PartialEq)]
+use dioxus::prelude::*;
+use dioxus_elements::input_data::keyboard_types::Key;
+
+#[derive(PartialEq, Eq)]
 pub enum FilterState {
     All,
     Active,
     Completed,
 }
 
-pub type Todos = im_rc::HashMap<u32, TodoItem>;
-
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TodoItem {
     pub id: u32,
     pub checked: bool,
@@ -25,7 +26,7 @@ pub fn app(cx: Scope<()>) -> Element {
     // Filter the todos based on the filter state
     let mut filtered_todos = todos
         .iter()
-        .filter(|(_, item)| match filter.get() {
+        .filter(|(_, item)| match **filter {
             FilterState::All => true,
             FilterState::Active => !item.checked,
             FilterState::Completed => item.checked,
@@ -43,7 +44,7 @@ pub fn app(cx: Scope<()>) -> Element {
 
     cx.render(rsx!{
         section { class: "todoapp",
-            style { [include_str!("../src/style.css")] }
+            style { include_str!("../assets/style.css") }
             div {
                 header { class: "header",
                     h1 {"todos"}
@@ -52,25 +53,25 @@ pub fn app(cx: Scope<()>) -> Element {
                         placeholder: "What needs to be done?",
                         value: "{draft}",
                         autofocus: "true",
-                        oninput: move |evt| draft.modify(|_| evt.value.clone()),
+                        oninput: move |evt| draft.set(evt.value.clone()),
                         onkeydown: move |evt| {
-                            if evt.key == "Enter" && !draft.is_empty() {
+                            if evt.key() == Key::Enter && !draft.is_empty() {
                                 todos.make_mut().insert(
-                                    *todo_id.get(),
+                                    **todo_id,
                                     TodoItem {
-                                        id: *todo_id.get(),
+                                        id: **todo_id,
                                         checked: false,
-                                        contents: draft.get().clone(),
+                                        contents: draft.to_string(),
                                     },
                                 );
-                                todo_id.modify(|todo_id| todo_id + 1);
-                                draft.modify(|_| "".to_string());
+                                *todo_id.make_mut() += 1;
+                                draft.set("".to_string());
                             }
                         }
                     }
                 }
                 ul { class: "todo-list",
-                    filtered_todos.iter().map(|id| rsx!(todo_entry( key: "{id}", id: *id, todos: todos  )))
+                    filtered_todos.iter().map(|id| rsx!(TodoEntry { key: "{id}", id: *id, todos: todos }))
                 }
                 (!todos.is_empty()).then(|| rsx!(
                     footer { class: "footer",
@@ -79,11 +80,11 @@ pub fn app(cx: Scope<()>) -> Element {
                             span {"{item_text} left"}
                         }
                         ul { class: "filters",
-                            li { class: "All", a { onclick: move |_| filter.modify(|_| FilterState::All), "All" }}
-                            li { class: "Active", a { onclick: move |_| filter.modify(|_| FilterState::Active), "Active" }}
-                            li { class: "Completed", a { onclick: move |_| filter.modify(|_| FilterState::Completed), "Completed" }}
+                            li { class: "All", a { onclick: move |_| filter.set(FilterState::All), "All" }}
+                            li { class: "Active", a { onclick: move |_| filter.set(FilterState::Active), "Active" }}
+                            li { class: "Completed", a { onclick: move |_| filter.set(FilterState::Completed), "Completed" }}
                         }
-                        (show_clear_completed).then(|| rsx!(
+                        show_clear_completed.then(|| rsx!(
                             button {
                                 class: "clear-completed",
                                 onclick: move |_| todos.make_mut().retain(|_, todo| !todo.checked),
@@ -104,43 +105,54 @@ pub fn app(cx: Scope<()>) -> Element {
 
 #[derive(Props)]
 pub struct TodoEntryProps<'a> {
-    todos: &'a UseState<Todos>,
+    todos: &'a UseState<im_rc::HashMap<u32, TodoItem>>,
     id: u32,
 }
 
-pub fn todo_entry<'a>(cx: Scope<'a, TodoEntryProps<'a>>) -> Element {
+pub fn TodoEntry<'a>(cx: Scope<'a, TodoEntryProps<'a>>) -> Element {
     let is_editing = use_state(&cx, || false);
 
     let todos = cx.props.todos.get();
     let todo = &todos[&cx.props.id];
     let completed = if todo.checked { "completed" } else { "" };
-    let editing = if *is_editing.get() { "editing" } else { "" };
+    let editing = if **is_editing { "editing" } else { "" };
 
-    rsx!(cx, li {
-        class: "{completed} {editing}",
-        onclick: move |_| is_editing.modify(|_| true),
-        onfocusout: move |_| is_editing.modify(|_| false),
-        div { class: "view",
-            input { class: "toggle", r#type: "checkbox", id: "cbg-{todo.id}", checked: "{todo.checked}",
-                onchange: move |evt| {
-                    cx.props.todos.make_mut()[&cx.props.id].checked = evt.value.parse().unwrap();
+    cx.render(rsx!{
+        li {
+            class: "{completed} {editing}",
+            div { class: "view",
+                input {
+                    class: "toggle",
+                    r#type: "checkbox",
+                    id: "cbg-{todo.id}",
+                    checked: "{todo.checked}",
+                    oninput: move |evt| {
+                        cx.props.todos.make_mut()[&cx.props.id].checked = evt.value.parse().unwrap();
+                    }
+                }
+
+                label {
+                    r#for: "cbg-{todo.id}",
+                    onclick: move |_| is_editing.set(true),
+                    prevent_default: "onclick",
+                    "{todo.contents}"
                 }
             }
-            label { r#for: "cbg-{todo.id}", pointer_events: "none", "{todo.contents}" }
+            is_editing.then(|| rsx!{
+                input {
+                    class: "edit",
+                    value: "{todo.contents}",
+                    oninput: move |evt| cx.props.todos.make_mut()[&cx.props.id].contents = evt.value.clone(),
+                    autofocus: "true",
+                    onfocusout: move |_| is_editing.set(false),
+                    onkeydown: move |evt| {
+                        match evt.key() {
+                            Key::Enter | Key::Escape | Key::Tab => is_editing.set(false),
+                            _ => {}
+                        }
+                    },
+                }
+            })
         }
-        is_editing.then(|| rsx!{
-            input {
-                class: "edit",
-                value: "{todo.contents}",
-                oninput: move |evt| cx.props.todos.make_mut()[&cx.props.id].contents = evt.value.clone(),
-                autofocus: "true",
-                onkeydown: move |evt| {
-                    match evt.key.as_str() {
-                        "Enter" | "Escape" | "Tab" => is_editing.modify(|_| false),
-                        _ => {}
-                    }
-                },
-            }
-        })
     })
 }
